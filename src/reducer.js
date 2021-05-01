@@ -1,72 +1,101 @@
 import * as debug from './debug'
 import { ActionTypes } from './actions'
-import { parseActions, isHistory, newHistory } from './helpers'
+import { parseActions, isHistory, idOfState, getStateById, getActiveChildOfState, getParentOfState } from './helpers'
 
 // createHistory
 function createHistory (state, ignoreInitialState) {
-  // ignoreInitialState essentially prevents the user from undoing to the
-  // beginning, in the case that the undoable reducer handles initialization
-  // in a way that can't be redone simply
-  const history = newHistory([], state, [])
+  const history = {
+    present: state,
+    _allStates: [state],
+    _parentIds: [null],
+    _childrenIds: [[]],
+    _activeChildIds: [null],
+    _latestUnfiltered: state,
+    group: null
+  }
   if (ignoreInitialState) {
     history._latestUnfiltered = null
   }
-  return history
+  return history;
 }
 
-// insert: insert `state` into history, which means adding the current state
-//         into `past`, setting the new `state` as `present` and erasing
-//         the `future`.
+// insert: insert `state` into history
 function insert (history, state, limit, group) {
-  const lengthWithoutFuture = history.past.length + 1
 
   debug.log('inserting', state)
-  debug.log('new free: ', limit - lengthWithoutFuture)
 
-  const { past, _latestUnfiltered } = history
-  const isHistoryOverflow = limit && limit <= lengthWithoutFuture
+  const {
+    present,
+    _allStates,
+    _parentIds,
+    _childrenIds,
+    _activeChildIds
+  } = history;
 
-  const pastSliced = past.slice(isHistoryOverflow ? 1 : 0)
-  const newPast = _latestUnfiltered != null
-    ? [
-      ...pastSliced,
-      _latestUnfiltered
-    ] : pastSliced
+  const presentId = idOfState(present, history);
+  const stateId = history._allStates.length;
 
-  return newHistory(newPast, state, [], group)
+  const new_allStates = [..._allStates, state];
+  const new_parentIds = [..._parentIds, presentId];
+  const new_childrenIds = [..._childrenIds, []];
+  const new_activeChildIds = [..._activeChildIds, null];
+  new_childrenIds[presentId] = [...new_childrenIds[presentId], stateId]
+  new_activeChildIds[presentId] = stateId;
+
+  return {
+    present: state,
+    _allStates: new_allStates,
+    _parentIds: new_parentIds,
+    _childrenIds: new_childrenIds,
+    _activeChildIds: new_activeChildIds,
+    _latestUnfiltered: state,
+    group
+  }
 }
 
-// jumpToFuture: jump to requested index in future history
-function jumpToFuture (history, index) {
-  if (index < 0 || index >= history.future.length) return history
+// jumpTo: jump to requested index in history
+function jumpTo (history, stateId) {
+  if (stateId < 0 || stateId >= history._allStates.length) return history
 
-  const { past, future, _latestUnfiltered } = history
+  const newState = getStateById(stateId, history);
 
-  const newPast = [...past, _latestUnfiltered, ...future.slice(0, index)]
-  const newPresent = future[index]
-  const newFuture = future.slice(index + 1)
-
-  return newHistory(newPast, newPresent, newFuture)
+  return {
+    ...history,
+    present: newState,
+    _latestUnfiltered: newState
+  }  
 }
 
-// jumpToPast: jump to requested index in past history
-function jumpToPast (history, index) {
-  if (index < 0 || index >= history.past.length) return history
+function jumpNext(history) {
+  const {
+    present
+  } = history;
 
-  const { past, future, _latestUnfiltered } = history
+  const presentId = idOfState(present, history);
+  const activeChildId = getActiveChildOfState(presentId, history);
+  const newState = getStateById(activeChildId, history)
 
-  const newPast = past.slice(0, index)
-  const newFuture = [...past.slice(index + 1), _latestUnfiltered, ...future]
-  const newPresent = past[index]
-
-  return newHistory(newPast, newPresent, newFuture)
+  return {
+    ...history,
+    present: newState,
+    _latestUnfiltered: newState
+  }
 }
 
-// jump: jump n steps in the past or forward
-function jump (history, n) {
-  if (n > 0) return jumpToFuture(history, n - 1)
-  if (n < 0) return jumpToPast(history, history.past.length + n)
-  return history
+function jumpPrev(history) {
+  const {
+    present
+  } = history;
+
+  const presentId = idOfState(present, history);
+  const parentId = getParentOfState(presentId, history);
+  const newState = getStateById(parentId, history);
+
+  return {
+    ...history,
+    present: newState,
+    _latestUnfiltered: newState
+  }
 }
 
 // helper to dynamically match in the reducer's switch-case
@@ -130,11 +159,7 @@ export default function undoable (reducer, rawConfig = {}) {
         return history
       } else if (isHistory(state)) {
         history = initialState = config.ignoreInitialState
-          ? state : newHistory(
-            state.past,
-            state.present,
-            state.future
-          )
+          ? state : {...state, _latestUnfiltered: state.present}
         debug.log(
           'initialHistory initialized: initialState is a history',
           initialState
@@ -157,31 +182,31 @@ export default function undoable (reducer, rawConfig = {}) {
         return history
 
       case config.undoType:
-        res = jump(history, -1)
+        res = jumpPrev(history)
         debug.log('perform undo')
         debug.end(res)
         return skipReducer(res, action, ...slices)
 
       case config.redoType:
-        res = jump(history, 1)
+        res = jumpNext(history)
         debug.log('perform redo')
         debug.end(res)
         return skipReducer(res, action, ...slices)
 
-      case config.jumpToPastType:
-        res = jumpToPast(history, action.index)
-        debug.log(`perform jumpToPast to ${action.index}`)
-        debug.end(res)
-        return skipReducer(res, action, ...slices)
+      // case config.jumpToPastType:
+      //   res = jumpToPast(history, action.index)
+      //   debug.log(`perform jumpToPast to ${action.index}`)
+      //   debug.end(res)
+      //   return skipReducer(res, action, ...slices)
 
-      case config.jumpToFutureType:
-        res = jumpToFuture(history, action.index)
-        debug.log(`perform jumpToFuture to ${action.index}`)
-        debug.end(res)
-        return skipReducer(res, action, ...slices)
+      // case config.jumpToFutureType:
+      //   res = jumpToFuture(history, action.index)
+      //   debug.log(`perform jumpToFuture to ${action.index}`)
+      //   debug.end(res)
+      //   return skipReducer(res, action, ...slices)
 
       case config.jumpType:
-        res = jump(history, action.index)
+        res = jumpTo(history, action.index)
         debug.log(`perform jump to ${action.index}`)
         debug.end(res)
         return skipReducer(res, action, ...slices)
@@ -220,12 +245,13 @@ export default function undoable (reducer, rawConfig = {}) {
 
         if (filtered) {
           // if filtering an action, merely update the present
-          const filteredState = newHistory(
-            history.past,
-            res,
-            history.future,
-            history.group
-          )
+          const presentId = idOfState(history.present, history);
+          history._allStates[presentId] = res;
+          const filteredState = {
+            ...history,
+            present: res,
+            _latestUnfiltered: res
+          }
           if (!config.syncFilter) {
             filteredState._latestUnfiltered = history._latestUnfiltered
           }
@@ -236,14 +262,16 @@ export default function undoable (reducer, rawConfig = {}) {
 
         /* eslint-disable-next-line no-case-declarations */
         const group = config.groupBy(action, res, history)
+
         if (group != null && group === history.group) {
           // if grouping with the previous action, only update the present
-          const groupedState = newHistory(
-            history.past,
-            res,
-            history.future,
-            history.group
-          )
+          const presentId = idOfState(history.present, history);
+          history._allStates[presentId] = res;
+          const groupedState = {
+            ...history,
+            present: res,
+            _latestUnfiltered: res
+          }
           debug.log('groupBy grouped the action with the previous action')
           debug.end(groupedState)
           return groupedState

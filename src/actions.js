@@ -14,12 +14,12 @@ export const ActionCreators = {
   redo () {
     return { type: ActionTypes.REDO }
   },
-  jumpToFuture (index) {
-    return { type: ActionTypes.JUMP_TO_FUTURE, index }
-  },
-  jumpToPast (index) {
-    return { type: ActionTypes.JUMP_TO_PAST, index }
-  },
+  // jumpToFuture (index) {
+  //   return { type: ActionTypes.JUMP_TO_FUTURE, index }
+  // },
+  // jumpToPast (index) {
+  //   return { type: ActionTypes.JUMP_TO_PAST, index }
+  // },
   jump (index) {
     return { type: ActionTypes.JUMP, index }
   },
